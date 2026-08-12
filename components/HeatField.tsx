@@ -23,16 +23,20 @@ interface HeatFieldProps {
   onIconColors?: (colors: IconColorMap) => void;
 }
 
-// Colormap stops: value 0 (edge, no energy) -> 1 (core, max energy).
-// Ordered per the brief: violet edges -> blue -> green -> yellow -> orange -> red core.
+// Colormap sampled from the reference sketch: value 0 (outer edge) -> 1 (core).
+// Indigo rim -> purple -> magenta -> amber -> deep orange -> warm orange core.
 const COLOR_STOPS: { t: number; rgb: [number, number, number]; a: number }[] = [
-  { t: 0.0, rgb: [0, 0, 0], a: 0.0 },
-  { t: 0.14, rgb: [88, 40, 150], a: 0.28 },
-  { t: 0.3, rgb: [50, 90, 210], a: 0.5 },
-  { t: 0.48, rgb: [46, 175, 120], a: 0.68 },
-  { t: 0.64, rgb: [230, 205, 45], a: 0.82 },
-  { t: 0.8, rgb: [255, 125, 30], a: 0.92 },
-  { t: 1.0, rgb: [255, 45, 25], a: 1.0 },
+  { t: 0.0, rgb: [40, 0, 90], a: 0.0 },
+  { t: 0.08, rgb: [72, 18, 198], a: 0.42 },
+  { t: 0.18, rgb: [88, 12, 176], a: 0.68 },
+  { t: 0.27, rgb: [110, 18, 150], a: 0.8 },
+  { t: 0.36, rgb: [161, 66, 151], a: 0.87 },
+  { t: 0.45, rgb: [189, 89, 144], a: 0.9 },
+  { t: 0.55, rgb: [184, 110, 60], a: 0.93 },
+  { t: 0.64, rgb: [182, 128, 14], a: 0.95 },
+  { t: 0.78, rgb: [178, 84, 32], a: 0.97 },
+  { t: 0.89, rgb: [196, 92, 18], a: 0.99 },
+  { t: 1.0, rgb: [245, 150, 78], a: 1.0 },
 ];
 
 function sampleColor(t: number): [number, number, number, number] {
@@ -51,7 +55,7 @@ function sampleColor(t: number): [number, number, number, number] {
       ];
     }
   }
-  return [255, 45, 25, 1];
+  return [245, 150, 78, 1];
 }
 
 function easeOutCubic(x: number) {
@@ -153,7 +157,11 @@ export default function HeatField({
       const currentRadius = maxRadius * expansionEase;
 
       // Priority sectors ramp their contribution up as the field matures.
-      const priorityRamp = clamp((t - (expansionDurationMs / 1000) * 0.5) / 1.6, 0, 1);
+      const priorityRamp = clamp(
+        (t - (expansionDurationMs / 1000) * 0.5) / 1.6,
+        0,
+        1
+      );
 
       // --- Persistent idle motion --------------------------------------
       // Global breathing + a very slow radius wobble so the FINAL state is
@@ -166,8 +174,8 @@ export default function HeatField({
       const nB = noiseB.current;
       const nEdge = noiseEdge.current;
 
-      // Noise scroll speeds are kept alive at full strength regardless of
-      // expansion progress, which is what makes the settled field "breathe".
+      // Noise scroll speeds stay at full strength regardless of expansion
+      // progress, which is what makes the settled field keep breathing.
       let idx = 0;
       for (let j = 0; j < gridSize; j++) {
         const ny = (j / (gridSize - 1)) * 2 - 1;
