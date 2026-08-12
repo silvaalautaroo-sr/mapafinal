@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { motion } from "framer-motion";
 import { INDUSTRIES, angleToUnitVector } from "@/lib/industries";
 import type { IconColorMap } from "@/components/HeatField";
@@ -24,8 +25,6 @@ const START_DELAY = 0.15; // small pause after the logo settles
  *  - a diagonal sheen so the pane reads as a physical piece of glass
  *  - a 1px specular highlight on the top edge and a dark drop shadow for depth
  *  - NO coloured border and NO outer glow
- * The heat colour arrives through a low-opacity tint layer inside the pane,
- * so the glass takes on the map's colour without lighting up its edge.
  */
 const GLASS_SHEEN =
   "linear-gradient(150deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.035) 45%, rgba(255,255,255,0.012) 100%)";
@@ -35,6 +34,20 @@ const GLASS_SHADOW = [
   "inset 0 -1px 1px rgba(255,255,255,0.05)", // bottom bounce light
   "0 6px 22px rgba(0,0,0,0.45)", // depth — dark, never glowing
 ].join(", ");
+
+/**
+ * Priority sectors (AI, Sustainability, Digital Twins) get a diffused label:
+ * a soft gradient fill drawn from the heat palette plus a gentle bloom, so the
+ * name reads as lit from within rather than plain white.
+ */
+const PRIORITY_LABEL_STYLE: CSSProperties = {
+  backgroundImage:
+    "linear-gradient(100deg, #f5a35e 0%, #e0648f 48%, #8b5cf6 100%)",
+  WebkitBackgroundClip: "text",
+  backgroundClip: "text",
+  color: "transparent",
+  filter: "drop-shadow(0 0 7px rgba(245,150,120,0.35))",
+};
 
 export default function IndustryIcons({
   active,
@@ -78,29 +91,45 @@ export default function IndustryIcons({
             }
             transition={{ duration, delay, ease: "easeOut" }}
           >
-            <div
-              className="relative -translate-x-1/2 -translate-y-1/2 flex h-12 w-12 items-center justify-center overflow-hidden rounded-full sm:h-14 sm:w-14"
-              style={{
-                background: GLASS_SHEEN,
-                boxShadow: GLASS_SHADOW,
-                backdropFilter: "blur(14px) saturate(1.6)",
-                WebkitBackdropFilter: "blur(14px) saturate(1.6)",
-              }}
-            >
-              {/* Heat tint: the glass adopts the colour of the map beneath it. */}
+            {/*
+              The wrapper is exactly the size of the circle, so the -50%
+              offsets keep the circle itself perfectly on the ring. The label
+              hangs below it absolutely and therefore doesn't shift the ring.
+            */}
+            <div className="relative -translate-x-1/2 -translate-y-1/2">
               <div
-                className="pointer-events-none absolute inset-0 rounded-full"
+                className="relative flex h-12 w-12 items-center justify-center overflow-hidden rounded-full sm:h-14 sm:w-14"
                 style={{
-                  background: tint,
-                  transition: "background 220ms linear",
+                  background: GLASS_SHEEN,
+                  boxShadow: GLASS_SHADOW,
+                  backdropFilter: "blur(14px) saturate(1.6)",
+                  WebkitBackdropFilter: "blur(14px) saturate(1.6)",
                 }}
-                aria-hidden="true"
-              />
-              <Icon
-                className="relative h-5 w-5 text-white/95 sm:h-6 sm:w-6"
-                aria-hidden="true"
-              />
-              <span className="sr-only">{industry.label}</span>
+              >
+                {/* Heat tint: the glass adopts the colour of the map beneath. */}
+                <div
+                  className="pointer-events-none absolute inset-0 rounded-full"
+                  style={{
+                    background: tint,
+                    transition: "background 220ms linear",
+                  }}
+                  aria-hidden="true"
+                />
+                <Icon
+                  className="relative h-5 w-5 text-white/95 sm:h-6 sm:w-6"
+                  aria-hidden="true"
+                />
+              </div>
+
+              {/* Industry name, Inter, centred under the glass circle. */}
+              <span
+                className={`absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-[9px] font-medium tracking-wide sm:text-[11px] ${
+                  industry.priority ? "" : "text-white/55"
+                }`}
+                style={industry.priority ? PRIORITY_LABEL_STYLE : undefined}
+              >
+                {industry.label}
+              </span>
             </div>
           </motion.div>
         );
