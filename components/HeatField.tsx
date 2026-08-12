@@ -12,16 +12,60 @@ interface HeatFieldProps {
   startedAt: number | null;
   /** How long the initial expansion takes to reach full radius, in ms. */
   expansionDurationMs?: number;
-  /** Icon ring radius, as a fraction of the container half-size (matches IndustryIcons' radiusPercent / 50). */
+  /** Icon ring radius, as a fraction of the container half-size. */
   ringRadius?: number;
-  /** Internal simulation resolution. Lower = faster, blur hides the pixelation. */
+  /** Internal simulation resolution. Lower = faster; the CSS blur hides the pixels. */
   gridSize?: number;
-  /**
-   * Called (throttled) with the heat color currently under each icon, so the
-   * icon glass can adopt the color of the map that touches it. rgba, 0-255.
-   */
+  /** Called (throttled) with the heat color currently under each icon. */
   onIconColors?: (colors: IconColorMap) => void;
 }
+
+/* ------------------------------------------------------------------ *
+ * WHAT THE FIELD ENCODES
+ *
+ * 1. Where the data concentrates -> a dominant core, plus energy
+ *    packets that travel from each industry inward to that core.
+ * 2. Which zones take the most impact -> per-sector intensity; the
+ *    priority industries burn hotter than the rest.
+ * 3. Which variables are most connected -> a heat CHANNEL between the
+ *    core and each industry. Channel width and brightness encode the
+ *    strength of that link.
+ * 4. How an urban scenario shifts -> every sector runs its own slow,
+ *    phase-shifted cycle, so the map keeps migrating instead of just
+ *    pulsing in place.
+ *
+ * All four are tunable from the constants below.
+ * ------------------------------------------------------------------ */
+
+const CORE_INTENSITY = 1.75;
+const CORE_SIGMA = 0.32;
+
+// Per-sector concentration (impact zone)
+const SECTOR_INTENSITY_PRIORITY = 0.55;
+const SECTOR_INTENSITY_NORMAL = 0.2;
+const SECTOR_SIGMA_PRIORITY = 0.26;
+const SECTOR_SIGMA_NORMAL = 0.18;
+
+// Connection channel core <-> sector (how strongly the variables are linked).
+// Kept deliberately WIDE: the canvas is blurred heavily on the way to the
+// screen, and thin channels get washed out completely.
+const CHANNEL_SIGMA = 0.14;
+const CHANNEL_INTENSITY_PRIORITY = 0.55;
+const CHANNEL_INTENSITY_NORMAL = 0.18;
+const CHANNEL_TAPER = 0.35; // channel fades slightly toward the outer end
+
+// Data packets travelling along the channel, industry -> core.
+const PULSE_SPEED = 0.2; // laps per second
+const PULSE_LENGTH_SIGMA = 0.09; // along the channel
+const PULSE_RADIUS_SIGMA = 0.11; // across the channel
+const PULSE_INTENSITY_PRIORITY = 0.6;
+const PULSE_INTENSITY_NORMAL = 0.25;
+
+// Scenario drift: each sector breathes on its own slow, offset cycle.
+const SCENARIO_SPEED = 0.18;
+const SCENARIO_DEPTH = 0.28;
+
+const VALUE_NORMALIZER = 2.2; // maps accumulated field value into 0..1
 
 // Colormap sampled from the reference sketch: value 0 (outer edge) -> 1 (core).
 // Indigo rim -> purple -> magenta -> amber -> deep orange -> warm orange core.
@@ -62,19 +106,34 @@ function easeOutCubic(x: number) {
   return 1 - Math.pow(1 - x, 3);
 }
 
-interface Hotspot {
+/** One industry node: its concentration blob plus its link back to the core. */
+interface Sector {
+  id: string;
   x: number;
   y: number;
-  sigma: number;
-  baseIntensity: number;
+  invL2: number; // 1 / |pos|^2, for projecting a point onto the channel
   priority: boolean;
+  phase: number; // scenario-cycle offset, so sectors peak at different times
+  twoSigmaSq: number;
+  sectorCut: number; // squared distance beyond which the blob is negligible
+  sectorIntensity: number;
+  channelIntensity: number;
+  pulseIntensity: number;
 }
+
+// Precomputed constants for the inner loop.
+const TWO_CHANNEL_SIGMA_SQ = 2 * CHANNEL_SIGMA * CHANNEL_SIGMA;
+const CHANNEL_CUT = (3 * CHANNEL_SIGMA) ** 2;
+const TWO_PULSE_LEN_SQ = 2 * PULSE_LENGTH_SIGMA * PULSE_LENGTH_SIGMA;
+const TWO_PULSE_RAD_SQ = 2 * PULSE_RADIUS_SIGMA * PULSE_RADIUS_SIGMA;
+const PULSE_LEN_CUT = (3 * PULSE_LENGTH_SIGMA) ** 2;
+const TWO_CORE_SIGMA_SQ = 2 * CORE_SIGMA * CORE_SIGMA;
 
 export default function HeatField({
   startedAt,
   expansionDurationMs = 2600,
-  ringRadius = 0.8, // 40% (icon radiusPercent) / 50
-  gridSize = 72,
+  ringRadius = 0.8,
+  gridSize = 96,
   onIconColors,
 }: HeatFieldProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -84,30 +143,34 @@ export default function HeatField({
   const noiseEdge = useRef(new Noise2D(453));
   const lastColorPush = useRef(0);
 
-  const hotspots = useRef<Hotspot[]>(
-    (() => {
-      const list: Hotspot[] = [
-        { x: 0, y: 0, sigma: 0.34, baseIntensity: 1.5, priority: false },
-      ];
-      for (const industry of INDUSTRIES) {
-        const { x, y } = angleToUnitVector(industry.angleDeg);
-        list.push({
-          x: x * ringRadius,
-          y: y * ringRadius,
-          sigma: industry.priority ? 0.3 : 0.24,
-          baseIntensity: industry.priority ? 0.9 : 0.5,
-          priority: industry.priority,
-        });
-      }
-      return list;
-    })()
-  );
-
-  // Fixed sample positions (one per icon) in the same [-1,1] space as the grid.
-  const iconSamples = useRef(
-    INDUSTRIES.map((industry) => {
+  const sectors = useRef<Sector[]>(
+    INDUSTRIES.map((industry, i) => {
       const { x, y } = angleToUnitVector(industry.angleDeg);
-      return { id: industry.id, x: x * ringRadius, y: y * ringRadius };
+      const px = x * ringRadius;
+      const py = y * ringRadius;
+      const sigma = industry.priority
+        ? SECTOR_SIGMA_PRIORITY
+        : SECTOR_SIGMA_NORMAL;
+      return {
+        id: industry.id,
+        x: px,
+        y: py,
+        invL2: 1 / Math.max(px * px + py * py, 1e-6),
+        priority: industry.priority,
+        // Golden-ratio spacing keeps the peaks from lining up into a wave.
+        phase: (i * 2.399963) % (Math.PI * 2),
+        twoSigmaSq: 2 * sigma * sigma,
+        sectorCut: (3 * sigma) ** 2,
+        sectorIntensity: industry.priority
+          ? SECTOR_INTENSITY_PRIORITY
+          : SECTOR_INTENSITY_NORMAL,
+        channelIntensity: industry.priority
+          ? CHANNEL_INTENSITY_PRIORITY
+          : CHANNEL_INTENSITY_NORMAL,
+        pulseIntensity: industry.priority
+          ? PULSE_INTENSITY_PRIORITY
+          : PULSE_INTENSITY_NORMAL,
+      };
     })
   );
 
@@ -122,22 +185,52 @@ export default function HeatField({
     const imageData = ctx.createImageData(gridSize, gridSize);
     const data = imageData.data;
 
-    // Shared math: returns the heat "value" (pre-colormap) at a warped point.
-    const fieldValue = (
-      wx: number,
-      wy: number,
-      spots: Hotspot[],
-      priorityRamp: number
-    ) => {
-      let value = 0;
-      for (const h of spots) {
-        const intensity = h.priority
-          ? h.baseIntensity + priorityRamp * 0.9
-          : h.baseIntensity;
-        const dx = wx - h.x;
-        const dy = wy - h.y;
+    // Per-frame sector weights, allocated once and reused.
+    const scenarioWeight = new Float32Array(sectors.current.length);
+    const pulsePos = new Float32Array(sectors.current.length);
+
+    /**
+     * Accumulated heat at a (already noise-warped) point: core + sector
+     * concentrations + connection channels + travelling data packets.
+     */
+    const fieldValue = (wx: number, wy: number, priorityRamp: number) => {
+      let value =
+        CORE_INTENSITY * Math.exp(-(wx * wx + wy * wy) / TWO_CORE_SIGMA_SQ);
+
+      const list = sectors.current;
+      for (let i = 0; i < list.length; i++) {
+        const s = list[i];
+        const w = scenarioWeight[i];
+
+        // --- concentration blob (impact zone) ---
+        const dx = wx - s.x;
+        const dy = wy - s.y;
         const d2 = dx * dx + dy * dy;
-        value += intensity * Math.exp(-d2 / (2 * h.sigma * h.sigma));
+        if (d2 < s.sectorCut) {
+          const boost = s.priority ? 1 + priorityRamp * 0.9 : 1;
+          value += s.sectorIntensity * w * boost * Math.exp(-d2 / s.twoSigmaSq);
+        }
+
+        // --- connection channel (how linked this variable is) ---
+        // Project the point onto the core->sector segment.
+        const tp = clamp((wx * s.x + wy * s.y) * s.invL2, 0, 1);
+        const cdx = wx - tp * s.x;
+        const cdy = wy - tp * s.y;
+        const cd2 = cdx * cdx + cdy * cdy;
+        if (cd2 < CHANNEL_CUT) {
+          const across = Math.exp(-cd2 / TWO_CHANNEL_SIGMA_SQ);
+          value += s.channelIntensity * w * (1 - CHANNEL_TAPER * tp) * across;
+
+          // --- data packet travelling inward along the channel ---
+          const dp = tp - pulsePos[i];
+          const dp2 = dp * dp;
+          if (dp2 < PULSE_LEN_CUT) {
+            value +=
+              s.pulseIntensity *
+              Math.exp(-dp2 / TWO_PULSE_LEN_SQ) *
+              Math.exp(-cd2 / TWO_PULSE_RAD_SQ);
+          }
+        }
       }
       return value;
     };
@@ -147,51 +240,51 @@ export default function HeatField({
       if (startedAt === null) return;
 
       const elapsedMs = now - startedAt;
-      const t = elapsedMs / 1000; // seconds, keeps running forever (idle motion)
+      const t = elapsedMs / 1000;
       const expansionT = clamp(elapsedMs / expansionDurationMs, 0, 1);
       const expansionEase = easeOutCubic(expansionT);
 
-      // Ring radius scaled slightly beyond the icons so the field fully
-      // envelops them at full expansion.
       const maxRadius = ringRadius * 1.25;
       const currentRadius = maxRadius * expansionEase;
 
-      // Priority sectors ramp their contribution up as the field matures.
       const priorityRamp = clamp(
         (t - (expansionDurationMs / 1000) * 0.5) / 1.6,
         0,
         1
       );
 
-      // --- Persistent idle motion --------------------------------------
-      // Global breathing + a very slow radius wobble so the FINAL state is
-      // never static — the field keeps expanding/contracting a hair forever.
+      // Scenario drift + packet positions, computed once per frame.
+      const list = sectors.current;
+      for (let i = 0; i < list.length; i++) {
+        scenarioWeight[i] =
+          1 -
+          SCENARIO_DEPTH +
+          SCENARIO_DEPTH * Math.sin(t * SCENARIO_SPEED + list[i].phase);
+        // Packets run from the industry (1) toward the core (0).
+        pulsePos[i] = 1 - ((t * PULSE_SPEED + i * 0.083) % 1);
+      }
+
+      // Global breathing + slow radius wobble: the settled field never freezes.
       const breathe = 0.93 + 0.07 * Math.sin(t * 0.7);
       const idleRadiusWobble = expansionEase * 0.03 * Math.sin(t * 0.45 + 1.3);
 
-      const spots = hotspots.current;
       const nA = noiseA.current;
       const nB = noiseB.current;
       const nEdge = noiseEdge.current;
 
-      // Noise scroll speeds stay at full strength regardless of expansion
-      // progress, which is what makes the settled field keep breathing.
       let idx = 0;
       for (let j = 0; j < gridSize; j++) {
         const ny = (j / (gridSize - 1)) * 2 - 1;
         for (let i = 0; i < gridSize; i++) {
           const nx = (i / (gridSize - 1)) * 2 - 1;
 
-          // Domain warp: displaces the sampling point with slow-moving noise
-          // so the field deforms like a fluid instead of scaling uniformly.
+          // Domain warp keeps the whole field fluid rather than geometric.
           const warpAmt = 0.17;
           const wx =
             nx + nA.fbm(nx * 1.6 + t * 0.06, ny * 1.6 - t * 0.05, 3) * warpAmt;
           const wy =
             ny + nB.fbm(nx * 1.6 - t * 0.05, ny * 1.6 + t * 0.07, 3) * warpAmt;
 
-          // Organic expanding edge: the boundary itself is noise-perturbed
-          // and keeps drifting, so it reads as living ink even when settled.
           const distFromCenter = Math.sqrt(nx * nx + ny * ny);
           const edgeNoise =
             nEdge.fbm(nx * 2.2 + t * 0.14, ny * 2.2 + t * 0.11, 3) * 0.17;
@@ -212,8 +305,8 @@ export default function HeatField({
             continue;
           }
 
-          const value = fieldValue(wx, wy, spots, priorityRamp) * mask * breathe;
-          const t01 = clamp(value / 1.7, 0, 1);
+          const value = fieldValue(wx, wy, priorityRamp) * mask * breathe;
+          const t01 = clamp(value / VALUE_NORMALIZER, 0, 1);
           const [r, g, b, a] = sampleColor(t01);
 
           const p = idx * 4;
@@ -231,8 +324,7 @@ export default function HeatField({
       if (onIconColors && now - lastColorPush.current > 80) {
         lastColorPush.current = now;
         const colors: IconColorMap = {};
-        for (const s of iconSamples.current) {
-          // Warp the icon's own point the same way the grid is warped.
+        for (const s of list) {
           const wx =
             s.x + nA.fbm(s.x * 1.6 + t * 0.06, s.y * 1.6 - t * 0.05, 3) * 0.17;
           const wy =
@@ -245,10 +337,9 @@ export default function HeatField({
             currentRadius + edgeNoise + idleRadiusWobble
           );
           const mask = 1 - smoothstep(localRadius * 0.72, localRadius, dist);
-          const value = fieldValue(wx, wy, spots, priorityRamp) * mask * breathe;
-          const t01 = clamp(value / 1.7, 0, 1);
+          const value = fieldValue(wx, wy, priorityRamp) * mask * breathe;
+          const t01 = clamp(value / VALUE_NORMALIZER, 0, 1);
           const [r, g, b] = sampleColor(t01);
-          // Alpha here = how strongly the map is touching this icon.
           colors[s.id] = [r, g, b, clamp(mask * (0.35 + t01 * 0.65), 0, 1)];
         }
         onIconColors(colors);
@@ -268,7 +359,7 @@ export default function HeatField({
       className="absolute inset-0 h-full w-full opacity-0 transition-opacity duration-700"
       style={{
         opacity: startedAt !== null ? 1 : 0,
-        filter: "blur(22px) saturate(1.15)",
+        filter: "blur(16px) saturate(1.15)",
         mixBlendMode: "screen",
       }}
       aria-hidden="true"
