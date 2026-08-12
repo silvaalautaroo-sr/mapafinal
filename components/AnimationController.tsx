@@ -5,14 +5,11 @@ import { INDUSTRIES } from "@/lib/industries";
 import Heatmap from "@/components/Heatmap";
 
 // --- Timing constants, all derived from the brief -------------------------
-const LOGO_DURATION_MS = 700; // Stage 1: fade + scale 0.8 -> 1
 const ICONS_START_DELAY_MS = 150; // small pause after the logo settles
 const ICON_GAP_MS = 165; // ~120-180ms cadence between icon reveals
 const ICON_COUNT = INDUSTRIES.length;
 const ICONS_TOTAL_MS = ICONS_START_DELAY_MS + (ICON_COUNT - 1) * ICON_GAP_MS + 200;
 const HEAT_START_DELAY_MS = ICONS_TOTAL_MS + 300; // brief pause once all icons are up
-const EXPANSION_DURATION_MS = 2600;
-const LIT_THRESHOLD_MS = EXPANSION_DURATION_MS * 0.6; // when the field visibly reaches the ring
 
 function shuffledIds(): string[] {
   const ids = INDUSTRIES.map((i) => i.id);
@@ -27,7 +24,6 @@ export default function AnimationController() {
   const [logoVisible, setLogoVisible] = useState(false);
   const [iconsActive, setIconsActive] = useState(false);
   const [heatStartedAt, setHeatStartedAt] = useState<number | null>(null);
-  const [litIds, setLitIds] = useState<Set<string>>(new Set());
 
   // Stable default order for the server-rendered markup; shuffled on the
   // client after mount so there is no hydration mismatch from randomness.
@@ -50,14 +46,9 @@ export default function AnimationController() {
     // Stage 2 — icons begin appearing one by one, random order.
     schedule(() => setIconsActive(true), ICONS_START_DELAY_MS);
 
-    // Stage 3 — the heat field starts expanding from the core.
+    // Stage 3 — the heat field starts expanding from the core. From here the
+    // icons pick up their color live from HeatField, so no separate "lit" flag.
     schedule(() => setHeatStartedAt(performance.now()), HEAT_START_DELAY_MS);
-
-    // Icons brighten once the expanding field visibly reaches the ring.
-    schedule(
-      () => setLitIds(new Set(INDUSTRIES.map((i) => i.id))),
-      HEAT_START_DELAY_MS + LIT_THRESHOLD_MS
-    );
 
     return () => {
       timers.current.forEach(clearTimeout);
@@ -70,7 +61,6 @@ export default function AnimationController() {
       logoVisible={logoVisible}
       iconsActive={iconsActive}
       revealOrder={revealOrder}
-      litIds={litIds}
       heatStartedAt={heatStartedAt}
     />
   );
