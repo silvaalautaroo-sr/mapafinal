@@ -10,10 +10,19 @@ interface CenterLogoProps {
 }
 
 /**
- * Stylized lynx head, redrawn as a single vector path so it renders crisply
- * at any size with no raster asset. White, simple, matches the reference
- * silhouette (pointed ears, angular jaw, cut-out eye).
+ * Lynx head logo — traced from the reference artwork into a single vector
+ * silhouette (facing right, pointed ears, cut-out eye) so it renders crisply
+ * at any size with no raster asset and a clean transparent background.
+ *
+ * The eye is punched out with fill-rule="evenodd" so whatever is behind the
+ * logo (the black stage / heat glow) shows through it like glass.
  */
+const OUTER_PATH =
+  "M 66 190 L 63.3 185.6 L 57.1 170.3 L 52.9 157 L 50 143.3 L 48.8 132.1 L 48.8 121.4 L 50.4 108.5 L 52.1 101.9 L 56.7 89.8 L 66.2 73.7 L 77.8 59.6 L 108.5 28 L 114.3 19.7 L 118.2 10 L 114.7 58.3 L 114.9 63.1 L 124.5 56 L 134.2 46.7 L 141.7 36.8 L 144.6 30.9 L 142.1 48.4 L 137.5 64.1 L 133 74.5 L 125.1 86.1 L 142.9 106.4 L 142.9 131.3 L 151.2 148.3 L 129 170.5 L 126.1 168.4 L 120.7 166.4 L 114.1 165.5 L 109.1 165.9 L 104.6 167.2 L 99.6 169.7 L 93.4 176.3 L 92.7 174.4 L 93.2 166.6 L 95.6 160.8 L 98.1 157.4 L 90 158.9 L 82.2 163.9 L 75.7 170.7 L 69.9 179.8 L 66 190 Z";
+
+const EYE_PATH =
+  "M 136.9 129 L 128.6 128.6 L 124.5 127.4 L 120.3 124.9 L 116 119.7 L 113.5 113.5 L 110.6 108.9 L 122.4 111.2 L 127.4 112.9 L 131.9 115.8 L 134.6 118.9 L 135.9 121.4 L 137.1 126.8 L 136.9 129 Z";
+
 export default function CenterLogo({ visible, glowing }: CenterLogoProps) {
   return (
     <motion.div
@@ -26,7 +35,13 @@ export default function CenterLogo({ visible, glowing }: CenterLogoProps) {
         className="relative flex items-center justify-center"
         animate={
           glowing
-            ? { filter: ["drop-shadow(0 0 18px rgba(255,90,40,0.55))", "drop-shadow(0 0 28px rgba(255,90,40,0.85))", "drop-shadow(0 0 18px rgba(255,90,40,0.55))"] }
+            ? {
+                filter: [
+                  "drop-shadow(0 0 16px rgba(255,90,40,0.5))",
+                  "drop-shadow(0 0 26px rgba(255,90,40,0.8))",
+                  "drop-shadow(0 0 16px rgba(255,90,40,0.5))",
+                ],
+              }
             : { filter: "drop-shadow(0 0 10px rgba(45,212,207,0.35))" }
         }
         transition={
@@ -36,36 +51,16 @@ export default function CenterLogo({ visible, glowing }: CenterLogoProps) {
         }
       >
         <svg
-          className="h-14 w-14 sm:h-20 sm:w-20 lg:h-24 lg:w-24"
+          className="h-16 w-16 sm:h-20 sm:w-20 lg:h-24 lg:w-24"
           viewBox="0 0 200 200"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
         >
+          {/* Outer silhouette + eye punched out via evenodd = clean edges */}
           <path
-            d="M100 18
-               C 92 18 86 32 84 46
-               C 78 40 66 26 54 22
-               C 56 40 62 56 68 66
-               C 50 62 32 66 20 78
-               C 36 82 52 84 64 82
-               C 48 92 36 108 34 128
-               C 52 122 68 112 78 100
-               C 74 116 76 136 86 152
-               C 96 138 100 122 100 106
-               C 100 122 104 138 114 152
-               C 124 136 126 116 122 100
-               C 132 112 148 122 166 128
-               C 164 108 152 92 136 82
-               C 148 84 164 82 180 78
-               C 168 66 150 62 132 66
-               C 138 56 144 40 146 22
-               C 134 26 122 40 116 46
-               C 114 32 108 18 100 18 Z"
+            d={`${OUTER_PATH} ${EYE_PATH}`}
             fill="white"
-          />
-          <path
-            d="M84 96 C 90 92 110 92 116 96 C 112 104 106 108 100 108 C 94 108 88 104 84 96 Z"
-            fill="black"
+            fillRule="evenodd"
           />
         </svg>
       </motion.div>
