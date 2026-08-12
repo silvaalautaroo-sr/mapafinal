@@ -14,6 +14,11 @@ interface IndustryIconsProps {
   radiusPercent?: number;
   /** Live heat color under each icon (rgba 0-255 + 0-1 alpha), from HeatField. */
   iconColors: IconColorMap;
+  /**
+   * True once the heat map has finished expanding. Only then do the priority
+   * industry names cross-fade from plain white into their diffused gradient.
+   */
+  heatSettled: boolean;
 }
 
 const GAP_SECONDS = 0.165; // 120-180ms cadence between successive reveals
@@ -54,6 +59,7 @@ export default function IndustryIcons({
   revealOrder,
   radiusPercent = 40,
   iconColors,
+  heatSettled,
 }: IndustryIconsProps) {
   return (
     <div className="absolute inset-0 z-20">
@@ -121,14 +127,37 @@ export default function IndustryIcons({
                 />
               </div>
 
-              {/* Industry name, Inter, centred under the glass circle. */}
-              <span
-                className={`absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-[9px] font-medium tracking-wide sm:text-[11px] ${
-                  industry.priority ? "" : "text-white/55"
-                }`}
-                style={industry.priority ? PRIORITY_LABEL_STYLE : undefined}
-              >
-                {industry.label}
+              {/*
+                Industry name, Inter, centred under the glass circle.
+                Priority names start plain white like every other label and
+                only cross-fade into the diffused gradient once the map has
+                fully expanded. Two stacked copies are used because a gradient
+                fill cannot be interpolated from a flat colour.
+              */}
+              <span className="absolute left-1/2 top-full mt-2 -translate-x-1/2 whitespace-nowrap text-[9px] font-medium tracking-wide sm:text-[11px]">
+                <span className="relative inline-block">
+                  <span
+                    className="text-white/55 transition-opacity duration-700 ease-out"
+                    style={{
+                      opacity: industry.priority && heatSettled ? 0 : 1,
+                    }}
+                  >
+                    {industry.label}
+                  </span>
+
+                  {industry.priority && (
+                    <span
+                      className="absolute inset-0 transition-opacity duration-700 ease-out"
+                      style={{
+                        ...PRIORITY_LABEL_STYLE,
+                        opacity: heatSettled ? 1 : 0,
+                      }}
+                      aria-hidden="true"
+                    >
+                      {industry.label}
+                    </span>
+                  )}
+                </span>
               </span>
             </div>
           </motion.div>
