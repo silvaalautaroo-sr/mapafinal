@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { INDUSTRIES, angleToUnitVector } from "@/lib/industries";
+import type { IconColorMap } from "@/components/HeatField";
 
 interface IndustryIconsProps {
   /** Stage 2 has started: icons begin appearing one by one. */
@@ -10,18 +11,22 @@ interface IndustryIconsProps {
   revealOrder: string[];
   /** Radius of the icon ring, as a percentage of the square container. */
   radiusPercent?: number;
-  /** Once the heat field reaches an icon, its circle brightens slightly. */
-  litIds: Set<string>;
+  /** Live heat color under each icon (rgba 0-255 + 0-1 alpha), from HeatField. */
+  iconColors: IconColorMap;
 }
 
 const GAP_SECONDS = 0.165; // 120-180ms cadence between successive reveals
 const START_DELAY = 0.15; // small pause after the logo settles
 
+/** Neutral glass look before the heat map reaches the icon. */
+const NEUTRAL_BG = "rgba(255, 255, 255, 0.05)";
+const NEUTRAL_BORDER = "rgba(255, 255, 255, 0.10)";
+
 export default function IndustryIcons({
   active,
   revealOrder,
   radiusPercent = 40,
-  litIds,
+  iconColors,
 }: IndustryIconsProps) {
   return (
     <div className="absolute inset-0 z-20">
@@ -32,9 +37,35 @@ export default function IndustryIcons({
 
         const orderIndex = revealOrder.indexOf(industry.id);
         const delay = START_DELAY + orderIndex * GAP_SECONDS;
-        const duration = 0.13 + ((orderIndex * 37) % 5) / 100; // 130-170ms, deterministic jitter
+        const duration = 0.13 + ((orderIndex * 37) % 5) / 100; // 130-170ms deterministic jitter
 
-        const lit = litIds.has(industry.id);
+        // Color of the heat map currently touching this icon.
+        const c = iconColors[industry.id];
+        const hasHeat = c && c[3] > 0.02;
+
+        // Glass tint: the icon adopts the map color at low opacity, like
+        // frosted glass over a colored light. No bright ring — just a faint
+        // edge that also takes the map color.
+        const tintA = hasHeat ? Math.min(0.9, c[3]) : 0;
+        const bg = hasHeat
+          ? `rgba(${c[0].toFixed(0)}, ${c[1].toFixed(0)}, ${c[2].toFixed(0)}, ${(
+              0.1 +
+              tintA * 0.22
+            ).toFixed(3)})`
+          : NEUTRAL_BG;
+        const border = hasHeat
+          ? `rgba(${c[0].toFixed(0)}, ${c[1].toFixed(0)}, ${c[2].toFixed(0)}, ${(
+              0.15 +
+              tintA * 0.3
+            ).toFixed(3)})`
+          : NEUTRAL_BORDER;
+        // Soft internal glow that matches the map, kept subtle (not a hard ring).
+        const glow = hasHeat
+          ? `inset 0 0 18px rgba(${c[0].toFixed(0)}, ${c[1].toFixed(
+              0
+            )}, ${c[2].toFixed(0)}, ${(tintA * 0.35).toFixed(3)})`
+          : "inset 0 0 12px rgba(255,255,255,0.03)";
+
         const Icon = industry.Icon;
 
         return (
@@ -50,27 +81,23 @@ export default function IndustryIcons({
             }
             transition={{ duration, delay, ease: "easeOut" }}
           >
-            <motion.div
+            <div
               className="relative -translate-x-1/2 -translate-y-1/2 flex h-12 w-12 items-center justify-center rounded-full border backdrop-blur-md sm:h-14 sm:w-14"
-              animate={{
-                borderColor: lit
-                  ? "rgba(94, 234, 212, 0.65)"
-                  : "rgba(94, 234, 212, 0.35)",
-                backgroundColor: lit
-                  ? "rgba(45, 212, 207, 0.14)"
-                  : "rgba(255, 255, 255, 0.04)",
-                boxShadow: lit
-                  ? "0 0 22px rgba(45,212,207,0.45)"
-                  : "0 0 10px rgba(45,212,207,0.18)",
+              style={{
+                backgroundColor: bg,
+                borderColor: border,
+                boxShadow: glow,
+                // Ease the tint changes so the color slides in as the map arrives.
+                transition:
+                  "background-color 220ms linear, border-color 220ms linear, box-shadow 220ms linear",
               }}
-              transition={{ duration: 0.6, ease: "easeInOut" }}
             >
               <Icon
-                className="h-5 w-5 text-white sm:h-6 sm:w-6"
+                className="h-5 w-5 text-white/90 sm:h-6 sm:w-6"
                 aria-hidden="true"
               />
               <span className="sr-only">{industry.label}</span>
-            </motion.div>
+            </div>
           </motion.div>
         );
       })}
