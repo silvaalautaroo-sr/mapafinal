@@ -1,9 +1,16 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import CenterLogo from "@/components/CenterLogo";
 import HeatField, { type IconColorMap } from "@/components/HeatField";
 import IndustryIcons from "@/components/IndustryIcons";
+
+/**
+ * How long after the heat field starts before it counts as fully expanded.
+ * Keep in sync with HeatField's `expansionDurationMs` default (2600ms); the
+ * extra margin lets the map visibly settle before the labels light up.
+ */
+const HEAT_SETTLE_MS = 3000;
 
 interface HeatmapProps {
   logoVisible: boolean;
@@ -21,10 +28,23 @@ export default function Heatmap({
   // Live heat color under each icon, streamed from the HeatField render loop.
   const [iconColors, setIconColors] = useState<IconColorMap>({});
 
+  // True once the map has finished expanding — this is what triggers the
+  // priority industry names to switch to their diffused gradient.
+  const [heatSettled, setHeatSettled] = useState(false);
+
   // Stable callback so HeatField's effect isn't torn down every render.
   const handleIconColors = useCallback((colors: IconColorMap) => {
     setIconColors(colors);
   }, []);
+
+  useEffect(() => {
+    if (heatStartedAt === null) {
+      setHeatSettled(false);
+      return;
+    }
+    const id = setTimeout(() => setHeatSettled(true), HEAT_SETTLE_MS);
+    return () => clearTimeout(id);
+  }, [heatStartedAt]);
 
   return (
     <div className="relative aspect-square w-[min(88vw,620px)] sm:w-[min(70vw,620px)]">
@@ -50,6 +70,7 @@ export default function Heatmap({
         active={iconsActive}
         revealOrder={revealOrder}
         iconColors={iconColors}
+        heatSettled={heatSettled}
       />
 
       <CenterLogo visible={logoVisible} glowing={heatStartedAt !== null} />
