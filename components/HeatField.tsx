@@ -4,6 +4,9 @@ import { useEffect, useRef } from "react";
 import { INDUSTRIES, angleToUnitVector } from "@/lib/industries";
 import { Noise2D, smoothstep, clamp } from "@/lib/noise";
 
+/** RGB color reported per icon so the icon glass can tint itself. */
+export type IconColorMap = Record<string, [number, number, number, number]>;
+
 interface HeatFieldProps {
   /** Timestamp (performance.now) when the expansion (Stage 3) began. Null = not started. */
   startedAt: number | null;
@@ -13,6 +16,11 @@ interface HeatFieldProps {
   ringRadius?: number;
   /** Internal simulation resolution. Lower = faster, blur hides the pixelation. */
   gridSize?: number;
+  /**
+   * Called (throttled) with the heat color currently under each icon, so the
+   * icon glass can adopt the color of the map that touches it. rgba, 0-255.
+   */
+  onIconColors?: (colors: IconColorMap) => void;
 }
 
 // Colormap stops: value 0 (edge, no energy) -> 1 (core, max energy).
@@ -63,12 +71,14 @@ export default function HeatField({
   expansionDurationMs = 2600,
   ringRadius = 0.8, // 40% (icon radiusPercent) / 50
   gridSize = 72,
+  onIconColors,
 }: HeatFieldProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef<number | undefined>(undefined);
   const noiseA = useRef(new Noise2D(11));
   const noiseB = useRef(new Noise2D(97));
   const noiseEdge = useRef(new Noise2D(453));
+  const lastColorPush = useRef(0);
 
   const hotspots = useRef<Hotspot[]>(
     (() => {
@@ -89,6 +99,14 @@ export default function HeatField({
     })()
   );
 
+  // Fixed sample positions (one per icon) in the same [-1,1] space as the grid.
+  const iconSamples = useRef(
+    INDUSTRIES.map((industry) => {
+      const { x, y } = angleToUnitVector(industry.angleDeg);
+      return { id: industry.id, x: x * ringRadius, y: y * ringRadius };
+    })
+  );
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -100,12 +118,32 @@ export default function HeatField({
     const imageData = ctx.createImageData(gridSize, gridSize);
     const data = imageData.data;
 
+    // Shared math: returns the heat "value" (pre-colormap) at a warped point.
+    const fieldValue = (
+      wx: number,
+      wy: number,
+      spots: Hotspot[],
+      priorityRamp: number
+    ) => {
+      let value = 0;
+      for (const h of spots) {
+        const intensity = h.priority
+          ? h.baseIntensity + priorityRamp * 0.9
+          : h.baseIntensity;
+        const dx = wx - h.x;
+        const dy = wy - h.y;
+        const d2 = dx * dx + dy * dy;
+        value += intensity * Math.exp(-d2 / (2 * h.sigma * h.sigma));
+      }
+      return value;
+    };
+
     const render = (now: number) => {
       rafRef.current = requestAnimationFrame(render);
       if (startedAt === null) return;
 
       const elapsedMs = now - startedAt;
-      const t = elapsedMs / 1000; // seconds, keeps running forever (idle breathing)
+      const t = elapsedMs / 1000; // seconds, keeps running forever (idle motion)
       const expansionT = clamp(elapsedMs / expansionDurationMs, 0, 1);
       const expansionEase = easeOutCubic(expansionT);
 
@@ -115,16 +153,21 @@ export default function HeatField({
       const currentRadius = maxRadius * expansionEase;
 
       // Priority sectors ramp their contribution up as the field matures.
-      const priorityRamp = clamp((t - expansionDurationMs / 1000 * 0.5) / 1.6, 0, 1);
+      const priorityRamp = clamp((t - (expansionDurationMs / 1000) * 0.5) / 1.6, 0, 1);
 
-      // Gentle global breathing so the whole field is never fully static.
-      const breathe = 0.94 + 0.06 * Math.sin(t * 0.7);
+      // --- Persistent idle motion --------------------------------------
+      // Global breathing + a very slow radius wobble so the FINAL state is
+      // never static — the field keeps expanding/contracting a hair forever.
+      const breathe = 0.93 + 0.07 * Math.sin(t * 0.7);
+      const idleRadiusWobble = expansionEase * 0.03 * Math.sin(t * 0.45 + 1.3);
 
       const spots = hotspots.current;
       const nA = noiseA.current;
       const nB = noiseB.current;
       const nEdge = noiseEdge.current;
 
+      // Noise scroll speeds are kept alive at full strength regardless of
+      // expansion progress, which is what makes the settled field "breathe".
       let idx = 0;
       for (let j = 0; j < gridSize; j++) {
         const ny = (j / (gridSize - 1)) * 2 - 1;
@@ -133,19 +176,23 @@ export default function HeatField({
 
           // Domain warp: displaces the sampling point with slow-moving noise
           // so the field deforms like a fluid instead of scaling uniformly.
-          const warpAmt = 0.16;
+          const warpAmt = 0.17;
           const wx =
-            nx + nA.fbm(nx * 1.6 + t * 0.05, ny * 1.6 - t * 0.04, 3) * warpAmt;
+            nx + nA.fbm(nx * 1.6 + t * 0.06, ny * 1.6 - t * 0.05, 3) * warpAmt;
           const wy =
-            ny + nB.fbm(nx * 1.6 - t * 0.04, ny * 1.6 + t * 0.06, 3) * warpAmt;
+            ny + nB.fbm(nx * 1.6 - t * 0.05, ny * 1.6 + t * 0.07, 3) * warpAmt;
 
           // Organic expanding edge: the boundary itself is noise-perturbed
-          // rather than a perfect circle, so it reads as ink spreading.
+          // and keeps drifting, so it reads as living ink even when settled.
           const distFromCenter = Math.sqrt(nx * nx + ny * ny);
           const edgeNoise =
-            nEdge.fbm(nx * 2.2 + t * 0.12, ny * 2.2 + t * 0.09, 3) * 0.16;
-          const localRadius = Math.max(0.05, currentRadius + edgeNoise);
-          const mask = 1 - smoothstep(localRadius * 0.72, localRadius, distFromCenter);
+            nEdge.fbm(nx * 2.2 + t * 0.14, ny * 2.2 + t * 0.11, 3) * 0.17;
+          const localRadius = Math.max(
+            0.05,
+            currentRadius + edgeNoise + idleRadiusWobble
+          );
+          const mask =
+            1 - smoothstep(localRadius * 0.72, localRadius, distFromCenter);
 
           if (mask <= 0.001) {
             const p = idx * 4;
@@ -157,18 +204,7 @@ export default function HeatField({
             continue;
           }
 
-          let value = 0;
-          for (const h of spots) {
-            const intensity = h.priority
-              ? h.baseIntensity + priorityRamp * 0.9
-              : h.baseIntensity;
-            const dx = wx - h.x;
-            const dy = wy - h.y;
-            const d2 = dx * dx + dy * dy;
-            value += intensity * Math.exp(-d2 / (2 * h.sigma * h.sigma));
-          }
-
-          value *= mask * breathe;
+          const value = fieldValue(wx, wy, spots, priorityRamp) * mask * breathe;
           const t01 = clamp(value / 1.7, 0, 1);
           const [r, g, b, a] = sampleColor(t01);
 
@@ -182,6 +218,33 @@ export default function HeatField({
       }
 
       ctx.putImageData(imageData, 0, 0);
+
+      // --- Report per-icon colors (throttled to ~12fps) ----------------
+      if (onIconColors && now - lastColorPush.current > 80) {
+        lastColorPush.current = now;
+        const colors: IconColorMap = {};
+        for (const s of iconSamples.current) {
+          // Warp the icon's own point the same way the grid is warped.
+          const wx =
+            s.x + nA.fbm(s.x * 1.6 + t * 0.06, s.y * 1.6 - t * 0.05, 3) * 0.17;
+          const wy =
+            s.y + nB.fbm(s.x * 1.6 - t * 0.05, s.y * 1.6 + t * 0.07, 3) * 0.17;
+          const dist = Math.sqrt(s.x * s.x + s.y * s.y);
+          const edgeNoise =
+            nEdge.fbm(s.x * 2.2 + t * 0.14, s.y * 2.2 + t * 0.11, 3) * 0.17;
+          const localRadius = Math.max(
+            0.05,
+            currentRadius + edgeNoise + idleRadiusWobble
+          );
+          const mask = 1 - smoothstep(localRadius * 0.72, localRadius, dist);
+          const value = fieldValue(wx, wy, spots, priorityRamp) * mask * breathe;
+          const t01 = clamp(value / 1.7, 0, 1);
+          const [r, g, b] = sampleColor(t01);
+          // Alpha here = how strongly the map is touching this icon.
+          colors[s.id] = [r, g, b, clamp(mask * (0.35 + t01 * 0.65), 0, 1)];
+        }
+        onIconColors(colors);
+      }
     };
 
     rafRef.current = requestAnimationFrame(render);
@@ -189,7 +252,7 @@ export default function HeatField({
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startedAt, expansionDurationMs, gridSize, ringRadius]);
+  }, [startedAt, expansionDurationMs, gridSize, ringRadius, onIconColors]);
 
   return (
     <canvas
