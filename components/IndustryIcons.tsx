@@ -18,9 +18,23 @@ interface IndustryIconsProps {
 const GAP_SECONDS = 0.165; // 120-180ms cadence between successive reveals
 const START_DELAY = 0.15; // small pause after the logo settles
 
-/** Neutral glass look before the heat map reaches the icon. */
-const NEUTRAL_BG = "rgba(255, 255, 255, 0.05)";
-const NEUTRAL_BORDER = "rgba(255, 255, 255, 0.10)";
+/**
+ * Real glassmorphism, not a glowing ring:
+ *  - a frosted pane that blurs and saturates whatever heat is behind it
+ *  - a diagonal sheen so the pane reads as a physical piece of glass
+ *  - a 1px specular highlight on the top edge and a dark drop shadow for depth
+ *  - NO coloured border and NO outer glow
+ * The heat colour arrives through a low-opacity tint layer inside the pane,
+ * so the glass takes on the map's colour without lighting up its edge.
+ */
+const GLASS_SHEEN =
+  "linear-gradient(150deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.035) 45%, rgba(255,255,255,0.012) 100%)";
+
+const GLASS_SHADOW = [
+  "inset 0 1px 1px rgba(255,255,255,0.22)", // top specular edge
+  "inset 0 -1px 1px rgba(255,255,255,0.05)", // bottom bounce light
+  "0 6px 22px rgba(0,0,0,0.45)", // depth — dark, never glowing
+].join(", ");
 
 export default function IndustryIcons({
   active,
@@ -37,34 +51,17 @@ export default function IndustryIcons({
 
         const orderIndex = revealOrder.indexOf(industry.id);
         const delay = START_DELAY + orderIndex * GAP_SECONDS;
-        const duration = 0.13 + ((orderIndex * 37) % 5) / 100; // 130-170ms deterministic jitter
+        const duration = 0.13 + ((orderIndex * 37) % 5) / 100; // 130-170ms jitter
 
-        // Color of the heat map currently touching this icon.
+        // Colour of the heat map currently under this icon.
         const c = iconColors[industry.id];
-        const hasHeat = c && c[3] > 0.02;
-
-        // Glass tint: the icon adopts the map color at low opacity, like
-        // frosted glass over a colored light. No bright ring — just a faint
-        // edge that also takes the map color.
-        const tintA = hasHeat ? Math.min(0.9, c[3]) : 0;
-        const bg = hasHeat
+        const hasHeat = c !== undefined && c[3] > 0.02;
+        const tintStrength = hasHeat ? Math.min(0.9, c[3]) : 0;
+        const tint = hasHeat
           ? `rgba(${c[0].toFixed(0)}, ${c[1].toFixed(0)}, ${c[2].toFixed(0)}, ${(
-              0.1 +
-              tintA * 0.22
+              tintStrength * 0.3
             ).toFixed(3)})`
-          : NEUTRAL_BG;
-        const border = hasHeat
-          ? `rgba(${c[0].toFixed(0)}, ${c[1].toFixed(0)}, ${c[2].toFixed(0)}, ${(
-              0.15 +
-              tintA * 0.3
-            ).toFixed(3)})`
-          : NEUTRAL_BORDER;
-        // Soft internal glow that matches the map, kept subtle (not a hard ring).
-        const glow = hasHeat
-          ? `inset 0 0 18px rgba(${c[0].toFixed(0)}, ${c[1].toFixed(
-              0
-            )}, ${c[2].toFixed(0)}, ${(tintA * 0.35).toFixed(3)})`
-          : "inset 0 0 12px rgba(255,255,255,0.03)";
+          : "rgba(0,0,0,0)";
 
         const Icon = industry.Icon;
 
@@ -82,18 +79,25 @@ export default function IndustryIcons({
             transition={{ duration, delay, ease: "easeOut" }}
           >
             <div
-              className="relative -translate-x-1/2 -translate-y-1/2 flex h-12 w-12 items-center justify-center rounded-full border backdrop-blur-md sm:h-14 sm:w-14"
+              className="relative -translate-x-1/2 -translate-y-1/2 flex h-12 w-12 items-center justify-center overflow-hidden rounded-full sm:h-14 sm:w-14"
               style={{
-                backgroundColor: bg,
-                borderColor: border,
-                boxShadow: glow,
-                // Ease the tint changes so the color slides in as the map arrives.
-                transition:
-                  "background-color 220ms linear, border-color 220ms linear, box-shadow 220ms linear",
+                background: GLASS_SHEEN,
+                boxShadow: GLASS_SHADOW,
+                backdropFilter: "blur(14px) saturate(1.6)",
+                WebkitBackdropFilter: "blur(14px) saturate(1.6)",
               }}
             >
+              {/* Heat tint: the glass adopts the colour of the map beneath it. */}
+              <div
+                className="pointer-events-none absolute inset-0 rounded-full"
+                style={{
+                  background: tint,
+                  transition: "background 220ms linear",
+                }}
+                aria-hidden="true"
+              />
               <Icon
-                className="h-5 w-5 text-white/90 sm:h-6 sm:w-6"
+                className="relative h-5 w-5 text-white/95 sm:h-6 sm:w-6"
                 aria-hidden="true"
               />
               <span className="sr-only">{industry.label}</span>
